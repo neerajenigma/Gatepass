@@ -1,29 +1,17 @@
 const express = require("express");
 const router = new express.Router();
+const customError = require("../customerror/CustomError");
 const { user, gatepass } = require("../models/User");
 const mongoose = require('mongoose');
-const midd = require("../middleware/Jwtauth.js");
+const jwtAuthenticator = require("../middleware/Jwtauth.js");
+const validationMiddleware = require("../middleware/ValidationMiddleware.js");
+const errorHandling = require("../middleware/ErrorHandling.js");
 const cookieParser = require('cookie-parser');
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const secreat = "this is your secreat";
-let date = new Date();
-
 router.use(cookieParser())
 
-handle_error = (err) => {
-    let errors = { email: '', passwd: '' };
-    if (err.code === 11000) {
-        errors.email = "this email is already registered";
-        return errors;
-    }
-    if (err.message.includes("user validation failed")) {
-        Object.values(err.errors).forEach(({ properties }) => {
-            errors[properties.path] = [properties.message];
-        })
-    }
-    return errors;
-};
 
 createtoken = (id) => {
     const token = jwt.sign({ id }, secreat, {
@@ -31,271 +19,498 @@ createtoken = (id) => {
     });
     return token;
 }
-router.post("/signup", async (req, res) => {
+
+router.use(jwtAuthenticator);
+router.post("/signup", validationMiddleware, async (req, res, next) => {
     try {
-        console.log("sign up request received")
-        const pre_token = await req.cookies.user;
-        if (pre_token) {
-            res.send("invalid request!");
-        }
-        else {
-            const temp_User = await user.create(req.body);
-            // const ress=await tuser.save();
-            // const token = createtoken(temp_User._id);
-            // res.cookie('user', token, { maxAge: 1000 * 60 * 60 * 24, httpOnly: false });
-            const resi = { "status": "success", "data": `${temp_User}` }
-            // console.log(res.cookies)
-            res.status(200).send(resi);
-        }
+        console.log("------signupreq------");
+        console.log(req.body);
+        const reqBody = { ...req.body, userPower: "", status: "pending" };
+        const tempUser = await user.create(reqBody);
+        console.log(tempUser);
+        if (tempUser) res.status(200).json({ success: true });
     }
-    catch (err) {
-        console.log(err)
-        const temp_Error = handle_error(err);
-        res.status(200).send(temp_Error);
+    catch (error) {
+        next(error);
     }
 })
 
-router.post("/signin", async (req, res) => {
+router.post("/signin", async (req, res, next) => {
     try {
-        // console.log(req.body);
-        const pre_token = await req.cookies.user;
-        if (pre_token) {
-            res.send("invalid request!");
-        }
-        else {
-            let errors = { email: '', passwd: '' };
-            const usermail = req.body.email;
-            const p = req.body.passwd;
-            // console.log(usermail,p);
-            const d = await user.findOne({ email: usermail })
-            // console.log(d)
-            if (d) {
-                const pass_auth = await bcrypt.compare(p, d.passwd);
-                // console.log(d._id);
-                if (pass_auth) {
-                    console.log("pass_authenticated");
-                    const token = createtoken(d._id);
-                    res.cookie('user', token, { maxAge: 1000 * 60 * 60 * 24, httpOnly: true });
-                }
-                else {
-                    errors.passwd = "invalid passwd!"
-                    res.send(errors)
-                }
-                // console.log(d);
-                // console.log(res.cookies)
-                const resi = { "req_status": "success", d }
-                res.send(resi)
+        console.log("-------entered in sign in req------");
+        const email = req.body.email;
+        const password = req.body.password;
+        const currentUser = await user.findOne({ email: email }).select('email password')
+        // console.log(user);
+        if (currentUser) {
+            // console.log("user pass_authenticated");
+            const passwordCheck = await bcrypt.compare(password, currentUser.password);
+            if (passwordCheck) {
+                // console.log("pass_authenticated");
+                const token = createtoken(currentUser._id);
+                res.cookie('user', token, { maxAge: 1000 * 60 * 60 * 24, httpOnly: true });
+                return res.status(200).json({
+                    success: true,
+                })
             }
             else {
-                errors.email = "invalid Email!";
-                res.send(errors)
+                // console.log("not pass_authenticated");
+                throw new customError("wrong password", 404, "Password");
             }
         }
+        else {
+            throw new customError("Email not registered", 404, "Email");
+        }
     }
-    catch (err) {
-        console.log(err);
+    catch (error) {
+        // console.log("enter in error block")
+        console.log(error)
+        next(error);
     }
 })
 
-router.use(midd);
-
-router.post("/gatepass", async (req, res) => {
+router.delete("/gatepass/:gpId", async (req, res, next) => {
     try {
-        console.log("req recieved");
-        if (req.body.err) {
-            res.send(req.body.err);
+        console.log("-------entered in delete req-------");
+        const gatepassId = req.params.gpId;
+        const currentUserId = req.body.user;
+        const currentGatepass = await gatepass.findOne({ '_id': gatepassId })
+        if (!currentGatepass) {
+            throw new customError("Gatepasss not found!", 404)
         }
-        const s_id = req.body.user;
-        const d = await user.findOne({ '_id': s_id })
-        if (d && d.status != "verified") { res.send("you r not verified user") }
-        else if (d) {
-            let ed = req.body
-            const temp = {
-                usertype: d.usertype,
-                name: d.name,
-                person_id: d.person_id,
-                mobnumber: d.mobnumber,
-                hostel: d.hostel,
-                user_id: s_id,
-                apply_date: date.toISOString(),
-                enntry_date: ed.entry_date,
-                exit_date: ed.exit_date,
-                purpose: ed.purpose,
+        if (currentGatepass.applicantId != currentUserId) {
+            throw new customError("you are not allowed for delete this gatepass!", 403)
+        }
+        const deletedGatepass = await gatepass.deleteOne({ '_id': gatepassId });
+        if (deletedGatepass) return res.status(200).json({ success: true });
+    }
+    catch (error) {
+        next(error);
+    }
+})
+
+router.post("/gatepass", validationMiddleware, async (req, res, next) => {
+    try {
+        console.log("-------gpapplyreqrecieved--------");
+        // console.log(req.body);
+        const reqBody = req.body;
+        // console.log(reqBody)
+        const currentUserId = reqBody.user;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        // console.log(currentUser);
+        if (!currentUser) res.redirect('/logout');
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else if (currentUser && reqBody) {
+            // console.log(reqBody);
+            if (currentUser.userType === "outsider" && reqBody.exitDate < reqBody.entryDate) {
+                throw new customError("exit date must be after entry date", 400, "exit date");
+            }
+            if (currentUser.userType === "student" && reqBody.exitDate > reqBody.entryDate) {
+                throw new customError("entry date must be after exit date", 400, "entry date");
+            }
+            // console.log("112");
+            const now = Date.now();
+            const istOffset = 5.5 * 60 * 60 * 1000;
+            const date = new Date(now + istOffset).toISOString();
+            // const reqBody = req.body
+            const newGatepass = {
+                userType: currentUser.userType,
+                name: currentUser.name,
+                personId: currentUser.personId,
+                contact: currentUser.contact,
+                hostel: currentUser.hostel,
+                applicantId: currentUserId,
+                applyDate: date,
+                entryDate: reqBody.entryDate,
+                exitDate: reqBody.exitDate,
+                purpose: reqBody.purpose,
                 status: "pending"
             }
-            // console.log(caretaker)
-            const gp = await gatepass.create(temp);
-            console.log(gp)
-            res.send(gp)
-        }
-        else {
-            res.send("we logged out!")
+            const createdGatepass = await gatepass.create(newGatepass);
+            if (createdGatepass) return res.status(200).json({
+                success: true
+            });
         }
     }
-    catch (err) {
-        console.log(err)
-        res.status(200).send(err)
+    catch (error) {
+        console.log(error);
+        next(error)
     }
 })
 
-router.get("/allgp", async (req, res) => {
+router.patch("/gatepass/:gpId", validationMiddleware, async (req, res, next) => {
     try {
-        const c_id = req.body.user;
-        let c = await user.findOne({ '_id': c_id })
-        if (!c) { res.send("invalid user request") }
-        // else if (!(c.user_power == "admin" || (req.body.hostel == c.hostel && c.user_power == "permit"))) { res.send("u r not allowed to do this request") }
+        console.log("-------gpeditreqrecieved--------");
+        // console.log(req.body);
+        let reqBody = req.body;
+        // console.log(reqBody)
+        const currentUserId = reqBody.user;
+        delete reqBody.user;
+        reqBody['status'] = "pending";
+        // console.log(reqBody)
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        // console.log(currentUser);
+        if (!currentUser) res.redirect('/logout');
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else if (currentUser && reqBody) {
+            // console.log(reqBody);
+            if (currentUser.userType === "outsider" && reqBody.exitDate < reqBody.entryDate) {
+                throw new customError("exit date must be after entry date", 400, "exit date");
+            }
+            if (currentUser.userType === "student" && reqBody.exitDate > reqBody.entryDate) {
+                throw new customError("entry date must be after exit date", 400, "entry date");
+            }
+            const updatedGatepass = await gatepass.findByIdAndUpdate(reqBody._id, reqBody, { new: true });
+            if (updatedGatepass) return res.status(200).json({
+                success: true
+            });
+        }
+    }
+    catch (error) {
+        console.log(error);
+        next(error)
+    }
+})
+
+router.get("/allgp", async (req, res, next) => {
+    try {
+        console.log("-------allgp req recieved------");
+        const pageNumber = req.query.pno;
+        const pageSize = req.query.psize;
+        let reqQuery = req.query
+        delete reqQuery.pno;
+        delete reqQuery.psize;
+        const currentUserId = req.body.user;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+
+        if (reqQuery.hostel === "all") delete reqQuery.hostel;
+        if (reqQuery.status === "all") delete reqQuery.status;
+        if (reqQuery.userType === "all") delete reqQuery.userType;
+        if (currentUser.userType === "caretaker") {
+            reqQuery['hostel'] = currentUser.hostel;
+        }
+        else if (["student", "outsider"].includes(currentUser.userType)) {
+            reqQuery = { ...reqQuery, applicantId: currentUserId };
+        }
+        if (!currentUser) res.redirect('/logout');
+        else if (currentUser.status != "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
         else {
-            if (req.body.hostel != "" && (c.user_power == "admin" || c.user_power == "security")) {
-                temp = { "hostel": req.body.hostel }
-            }
-            else if (c.user_power == "caretaker") {
-                temp = { "hostel": req.body.hostel }
-            }
-            else if (c.user_power == "request") {
-                temp = {
-                    "hostel": req.body.hostel,
-                    "user_id": c._id
-                }
-            }
-            console.log(temp);
-            gatepass.find(temp, function (err, gps) {
+            // console.log(reqQuery);
+            gatepass.find(reqQuery)
+                .select('name contact hostel purpose entryDate exitDate applyDate status')
+                .skip((pageNumber - 1) * pageSize)
+                .limit(pageSize)
+                .exec(function (err, gatepasses) {
+                    if (err) {
+                        throw (err);
+                    }
+                    else {
+                        return res.status(200).send(gatepasses)
+                    }
+                })
+
+        }
+    }
+    catch (err) {
+        next(err);
+    }
+})
+
+router.get("/gpcount", async (req, res, next) => {
+    try {
+        console.log("------gpcount req recieved-------");
+        let reqQuery = req.query
+        const currentUserId = req.body.user;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+
+        if (reqQuery.hostel === "all") delete reqQuery.hostel;
+        if (reqQuery.status === "all") delete reqQuery.status;
+        if (reqQuery.userType === "all") delete reqQuery.userType;
+        if (currentUser.userType === "caretaker") {
+            reqQuery['hostel'] = currentUser.hostel;
+        }
+        else if (["student", "outsider"].includes(currentUser.userType)) {
+            reqQuery = { ...reqQuery, applicantId: currentUserId };
+        }
+        if (!currentUser) res.redirect('/logout');
+        else if (currentUser.status != "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else {
+            gatepass.countDocuments(reqQuery, function (err, gatepassCount) {
                 if (err) {
-                    res.send(err);
+                    throw (err);
                 }
                 else {
-                    console.log(gps);
-                    res.send(gps)
+                    return res.send(gatepassCount.toString())
                 }
+            })
+        }
+    }
+    catch (err) {
+        next(err);
+    }
+})
+
+router.get("/View_gp/:gpId", async (req, res, next) => {
+    try {
+        console.log("------viewgp_ req recieved------");
+        const currentUserId = req.body.user;
+        const gatepassId = req.params.gpId;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        if (!currentUser) res.redirect("/logout");
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else {
+            const currentGatepass = await gatepass.findOne({ '_id': gatepassId })
+            if (!currentGatepass) {
+                throw new customError("gatepass not found", 404)
+            }
+            else if (!((["admin", "security"].includes(currentUser.userPower)) || currentGatepass.applicantId === currentUserId || (currentGatepass.hostel === currentUser.hostel && currentUser.userPower === "caretaker"))) {
+                throw new customError("u r not allowed to do this request", 403);
+            }
+            return res.status(200).send(currentGatepass);
+        }
+    }
+    catch (err) {
+        next(err);
+    }
+});
+
+router.post("/gp_action/:gpId", async (req, res, next) => {
+    try {
+        console.log("-------gpaction--------");
+        const currentUserId = req.body.user;
+        const gatepassId = req.params.gpId;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        const currentGatepass = await gatepass.findOne({ '_id': gatepassId })
+        let reqBody = req.body;
+
+        if (!currentUser) res.redirect("/logout");
+        if (!currentGatepass) {
+            throw new customError("gatepass not found", 404);
+        }
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else if (!((["admin", "caretaker"].includes(currentUser.userPower) && reqBody.hasOwnProperty("status")) || (currentUser.userPower === "security" && (!reqBody.hasOwnProperty("status"))))) {
+            throw new customError("you are not allowed to do this", 403);
+        }
+        else {
+            delete reqBody.user;
+            const newGatepass = { ...currentGatepass._doc, ...reqBody };
+            const updatedGatepass = await gatepass.findByIdAndUpdate(gatepassId, newGatepass, { new: true });
+            if (updatedGatepass) return res.status(200).json({ success: true });
+        }
+    }
+    catch (err) {
+        // console.log(err);
+        next(err);
+    }
+})
+
+router.get("/Show_profile/:userId", async (req, res, next) => {
+    try {
+        console.log("--------Show_profile req recieved--------");
+        const currentUserId = req.body.user;
+        const viewUserId = req.params.userId;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        if (!currentUser) res.redirect("/logout");
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else {
+            const viewUser = await user.findOne({ '_id': viewUserId }).select('-password')
+            if (!viewUser) {
+                throw new customError("user not found", 404);
+            }
+            else if (!(["admin", "caretaker", "security"].includes(currentUser.userPower))) {
+                throw new customError("u r not allowed to do this request", 403)
+            }
+            else {
+                return res.status(200).send(viewUser);
+            }
+        }
+    }
+    catch (err) {
+        next(err);
+    }
+})
+
+router.get("/myself", async (req, res, next) => {
+    try {
+        console.log("--------myprofile req recieved--------");
+        if (!req.body.hasOwnProperty("user")) {
+            res.redirect("/logout");
+        }
+        else {
+            console.log(req.body);
+            const currentUserId = req.body.user;
+            const currentUser = await user.findOne({ '_id': currentUserId }).select('-password')
+            if (!currentUser) res.redirect("/logout");
+            else return res.status(200).send(currentUser);
+        }
+    }
+    catch (err) {
+        next(err);
+    }
+})
+
+router.patch("/myself", validationMiddleware, async (req, res, next) => {
+    try {
+        console.log("--------edit myprofile req recieved--------");
+        let reqBody = req.body;
+
+        // console.log(reqBody)
+        const currentUserId = reqBody.user;
+        delete reqBody.user;
+        let currentUser = await user.findOne({ '_id': currentUserId })
+        // console.log(currentUser);
+        if (!currentUser) res.redirect('/logout');
+        if (currentUser.userType !== "admin") reqBody['status'] = "pending";
+        if (currentUser && reqBody) {
+            for (let prop in reqBody) {
+                currentUser[prop] = reqBody[prop];
+            }
+            // currentUser[status]="pending";
+            // console.log(currentUser);
+            const updatedUser = await user.findByIdAndUpdate(currentUser._id, currentUser, { new: true });
+            // console.log(updatedUser);
+            if (updatedUser) return res.status(200).json({
+                success: true
             });
         }
     }
     catch (err) {
-        res.send(err);
+        next(err);
     }
 })
 
-router.post("/gp_action", async (req, res) => {
+router.get("/alluser", async (req, res, next) => {
     try {
-        const c_id = req.body.user;
-        const g_id = req.body.g_id;
-        let c = await user.findOne({ '_id': c_id })
-        let d = await gatepass.findOne({ '_id': g_id })
-        if (c.status != "verified") { res.send("you r not verified user") }
-        else if (c.user_power != "permit" || c.hostel != d.hostel) { res.send("you r not allow to do this task") }
-        else if (d) {
-            const bd = req.body;
-            d.status = bd.status;
-            d.message = bd.message;
-            d.action_by = c_id;
-            d.action_date = date.toISOString();
-            const d_new = await gatepass.findByIdAndUpdate(g_id, d, { new: true });
-            res.send(d_new);
+        console.log("-------alluserreq------")
+        const pageNumber = req.query.pno;
+        const pageSize = req.query.psize;
+        let reqQuery = await req.query
+        delete reqQuery.pno;
+        delete reqQuery.psize;
+
+        const currentUserId = req.body.user;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+
+        if (reqQuery.hostel === "all") delete reqQuery.hostel;
+        if (reqQuery.status === "all") delete reqQuery.status;
+        if (reqQuery.userType === "all") delete reqQuery.userType;
+        if (currentUser.userType === "caretaker") {
+            reqQuery['hostel'] = currentUser.hostel;
+        }
+        if (!currentUser) res.redirect('/logout');
+        else if (currentUser.status != "verified") {
+            throw new customError("you are not verified user!", 403)
         }
         else {
-            res.status(200).send("invalid gp_action request")
+            user.find(reqQuery)
+                .select('name email status userType contact')
+                .skip((pageNumber - 1) * pageSize)
+                .limit(pageSize)
+                .exec(function (err, users, next) {
+                    if (err) {
+                        next(err);
+                    }
+                    else {
+                        res.status(200).send(users)
+                    }
+                })
+
         }
     }
     catch (err) {
-        res.status(200).send(err)
+        next(err);
     }
 })
 
-router.get("/alluser", async (req, res) => {
+router.get("/usercount", async (req, res, next) => {
     try {
-        const c_id = req.body.user;
-        let c = await user.findOne({ '_id': c_id })
-        if (!c) { res.send("invalid user request") }
-        else if (!(c.user_power == "admin" || (c.user_power == "permit" && c.hostel == req.body.hostel))) { res.send("u r not allowed to do this request") }
+        console.log("--------usercount req recieved--------");
+        let reqQuery = await req.query
+
+        const currentUserId = req.body.user;
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        if (reqQuery.hostel === "all") delete reqQuery.hostel;
+        if (reqQuery.status === "all") delete reqQuery.status;
+        if (reqQuery.userType === "all") delete reqQuery.userType;
+        if (currentUser.userType === "caretaker") {
+            reqQuery['hostel'] = currentUser.hostel;
+        }
+        if (!currentUser) res.redirect('/logout');
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
         else {
-            const isadmin = (c.user_power == "admin" ? true : false)
-            let temp = {};
-            if (req.body.hostel != "") {
-                temp[hostel] = (isadmin ? req.body.hostel : c.hostel)
-            }
-            if (isadmin && req.body.usertype != "") {
-                temp[usertype] = req.body.usertype
-            }
-            else if (!isadmin) {
-                temp[user_type] = "{ $in:[outsider,student]}}";
-            }
-            console.log("temp set")
-            console.log(temp);
-            user.find(temp, function (err, users) {
+            user.countDocuments(reqQuery, function (err, userCount, next) {
                 if (err) {
-                    res.send(err);
+                    next(err);
                 }
                 else {
-                    console.log(users);
-                    res.send(users)
+                    return res.status(200).send(userCount.toString());
                 }
-            });
+            })
         }
     }
     catch (err) {
-        res.send(err);
+        next(err);
     }
 })
 
-router.post("/user_action", async (req, res) => {
+router.post("/user_action", async (req, res, next) => {
     try {
-        const admin_id = req.body.user;
-        const user_id = req.body.user_id;
-        let guest = await user.findOne({ '_id': user_id });
-        const admin = await user.findOne({ '_id': admin_id })
-        if (guest && admin && admin.user_power == "admin") {
-            guest.status = req.body.action
-            guest.user_power = req.body.user_power
-            console.log(guest)
-            const de = await user.findByIdAndUpdate(user_id, guest, { new: true });
-            res.send(de);
+        console.log("--------useraction req recieved--------");
+        let reqBody = req.body;
+        const currentUserId = reqBody.user;
+        const actionUserId = reqBody.userId;
+        let actionUser = await user.findOne({ '_id': actionUserId });
+        const currentUser = await user.findOne({ '_id': currentUserId })
+        if (!currentUser) res.redirect('/logout');
+        else if (!actionUser) {
+            throw new customError("user not found!", 404)
+        }
+        else if (currentUser.status !== "verified") {
+            throw new customError("you are not verified user!", 403)
+        }
+        else if (currentUser.userPower !== "admin" || currentUserId === actionUserId) {
+            throw new customError("you are not allowed!", 403)
         }
         else {
-            res.status(200).send("admin or guest is wrong")
+            const newUser = { ...actionUser._doc, userPower: reqBody.userPower, status: reqBody.status }
+            const updatedUser = await user.findByIdAndUpdate(actionUserId, newUser, { new: true });
+            return res.status(200).send(updatedUser);
         }
     }
     catch (err) {
-        res.status(200).send(err)
-    }
-})
-
-router.post("/gate_update", async (req, res) => {
-    try {
-        sec_id = req.body.user;
-        g_id = req.body.g_id;
-        sec = await user.findOne({ '_id': sec_id });
-        gp = await gatepass.findOne({ '_id': sec_id });
-        action_type = req.body.action_type;
-        if (!gp || !sec) { res.send("gp or sec does not exist") }
-        if (action_type = "in") {
-            gp.in = req.body.in;
-        }
-        else if (action_type = "out") {
-            gp.out = req.body.out;
-        }
-        else if (action_type = "report") {
-            user = await user.findOne({ '_id': gp.user_id });
-            user.report = user.report + 1;
-            user = await user.findByIdAndUpdate(gp.user_id, user, { new: true })
-            res.send(user);
-        }
-        gp = await gatepass.findByIdAndUpdate(g_id, gp, { new: true })
-        res.send(gp)
-    }
-    catch (err) {
-        res.send(err);
+        next(err)
     }
 })
 
 router.get("/logout", async (req, res) => {
     try {
+        console.log("--------logout req recieved--------");
         return res
             .clearCookie("user")
             .status(200)
-            .send("Successfully logged out 😏 🍀");
+            .send("Successfully logged out");
     }
     catch (err) {
         res.status(401).send(err)
     }
 })
+
+router.use(errorHandling)
 
 module.exports = router;

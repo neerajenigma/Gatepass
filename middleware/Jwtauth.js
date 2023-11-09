@@ -1,38 +1,40 @@
-const express=require("express")
-const jwt=require("jsonwebtoken");
-const cookieParser=require('cookie-parser');
-const secreat="this is your secreat";
-// let flag=false;
+const express = require("express")
+const jwt = require("jsonwebtoken");
+const customError = require("../customerror/CustomError")
+const secreat = "this is your secreat";
 
-const middle=async(req,res,next)=>{
+const middle = async (req, res, next) => {
+    try {
+        console.log("--enterd in Jwtauth--")
+        const token = await req.cookies.user;
+        jwt.verify(token, secreat, async function (err, decodedtoken) {
+            try {
+                if (err && req.path !== "/signup" && req.path !== "/signin") {
+                    console.log("err and signup");
+                    const error = new customError("kindly login first!", 401, "all");
+                    throw error
+                }
+                else if (!err && (req.path === "/signup" || req.path === "/signin")) {
+                    console.log("no err and signup");
+                    const error = new customError("user already logged in,kindly logout first!", 200, "all");
+                    throw error
+                }
+                else if (!err) {
+                    console.log("no err and no signup");
+                    const p = await decodedtoken.id;
+                    req.body = await { ...req.body, "user": p };
 
-    console.log("enterd in middleware")
-    // console.log(req.cookies);
-    const token=await req.cookies.user;
-    if(token){
-        jwt.verify(token,secreat,async(err,decodedtoken)=>{
-            if(err){
-                // console.log('not corrct token');
-                console.log(err);
-                res.send(err);
+                }
+                next()
             }
-            else{
-                // req.user=decodedtoken.user;
-                console.log(decodedtoken);
-                const p=await decodedtoken.id;
-                console.log(p)
-                req.body=await {...req.body,"user":p};
-                // flag=true;
-                console.log(req.body.user)
-                next();
-                // console.log(req);
+            catch (error) {
+                next(error)
             }
-        })
+        });
     }
-    else{
-        req.body.err="not accessible";
-        next()
+    catch (error) {
+        next(error);
     }
 }
 
-module.exports=middle;
+module.exports = middle;

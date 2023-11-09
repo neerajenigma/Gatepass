@@ -1,149 +1,171 @@
-const mongoose=require("mongoose");
-const validator=require("validator");
-const bcrypt=require("bcrypt");
+const mongoose = require("mongoose");
+const validator = require("validator");
+const bcrypt = require("bcrypt");
 const { default: isEmail } = require("validator/lib/isEmail");
 
-const user_s=new mongoose.Schema({
-    email:{
+const userSchema = new mongoose.Schema({
+    email: {
         type: String,
-        unique:true,
-        required:[true,'please enter an email'],
-        validate:{
+        unique: true,
+        required: [true, 'please enter an email'],
+        validate: {
             validator: validator.isEmail,
             message: '{VALUE} is not a valid email',
             isAsync: false
-          }  
+        }
     },
-    passwd:{
-        type: String,
-        required:[true,'please enter password']   
-    },
-    usertype:{
-        type: String,
-        required: [true,'please select your user type']
-    },
-    name:{
-        type : String,
-        required: [true,'please enter your name']
-    },
-    person_id:{
-        type: String,
-        required: [true,'please enter id']
-    },
-    person_id_type:{
-        type: String,
-        required: [true,'please enter id']
-    },
-    mobnumber:{
+    contact: {
         type: Number,
-        // required: [true,'please enter number']
+        required: [true, 'Please enter contact'],
+        unique: true,
+        validate: {
+            validator: function (value) {
+                if (value < 1000000000 || value > 9999999999) {
+                    throw new mongoose.Error.ValidationError(this, {
+                        message: 'Invalid mobile number',
+                        path: 'contact'
+                    });
+                }
+            }
+        }
     },
-    department:{
+    password: {
+        type: String,
+        required: [true, 'please enter password'],
+        validate: {
+            validator: function (value) {
+                if (!(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,15}$/.test(value))) {
+                    throw new mongoose.Error.ValidationError(this, {
+                        message: "enter strong password",
+                        path: 'password'
+                    })
+                }
+            }
+        }
+    },
+    userType: {
+        type: String,
+        required: [true, 'please select your user type']
+    },
+    name: {
+        type: String,
+        required: [true, 'please enter your name']
+    },
+    personId: {
+        type: String,
+        required: [true, 'please enter id']
+    },
+    personIdType: {
+        type: String,
+        required: [true, 'please enter id']
+    },
+
+    department: {
         type: String,
         default: ""
         // required: [true,'please enter your department']
     },
-    hostel:{
+    hostel: {
         type: String,
         default: ""
     },
-    dob:{
+    dateOfBirth: {
         type: Date,
-        // default: ""
+        default: null
     },
-    degree:{
+    degree: {
         type: String,
         default: ""
     },
-    yearofadmission:{
+    admissionDate: {
         type: Date,
-        // default: ""
+        default: null
     },
-    status:{
+    status: {
         type: String,
         default: "pending"
     },
-    peraddress:{
+    permanentAddress: {
         type: String,
-        default: ""
+        require: true
     },
-    user_power:{
+    userPower: {
         type: String,
         default: ""
     }
 })
 
-const gatepass_s=new mongoose.Schema({
-    user_id:{
+const gatepassSchema = new mongoose.Schema({
+    applicantId: {
 
     },
-    usertype:{
+    userType: {
         type: String,
-        required: [true,'please select your user type']
+        required: [true, 'please select your user type']
     },
-    name:{
-        type : String,
-        required: [true,'please enter your name']
-    },
-    person_id:{
+    name: {
         type: String,
-        required: [true,'please enter id']
+        required: [true, 'please enter your name']
     },
-    mobnumber:{
+    personId: {
+        type: String,
+        required: [true, 'please enter id']
+    },
+    contact: {
         type: Number,
         // required: [true,'please enter number']
     },
-    hostel:{
+    hostel: {
         type: String,
         default: ""
     },
-    status:{
+    status: {
         type: String,
         default: "pending"
     },
-    purpose:{
+    purpose: {
         type: String,
         default: ""
     },
-    entry_date:{
-        type: String,
-        default: ""
+    entryDate: {
+        type: Date,
+        default: null
     },
-    exit_date:{
-        type: String,
-        default: ""
+    exitDate: {
+        type: Date,
+        default: null
     },
-    apply_date:{
-        type: String,
-        default: ""
+    applyDate: {
+        type: Date,
+        default: null
     },
-    action_date:{
-        type: String,
-        default: ""
+    actionDate: {
+        type: Date,
+        default: null
     },
-    action_by:{
+    actionBy: {
 
     },
-    in:{
-        type: String,
-        default: ""
+    inDate: {
+        type: Date,
+        default: null
     },
-    out:{
-        type: String,
-        default: ""
+    outDate: {
+        type: Date,
+        default: null
     },
-    message:{
+    message: {
         type: String,
         default: ""
     }
 })
 
-user_s.pre('save',async function(next){
-    const salt= await bcrypt.genSalt();
-    this.passwd=await bcrypt.hash(this.passwd,salt);
+userSchema.pre('save', async function (next) {
+    const salt = await bcrypt.genSalt();
+    this.password = await bcrypt.hash(this.password, salt);
     next();
 })
 
-const user=new mongoose.model("USER",user_s)
-const gatepass=new mongoose.model("GATEPASS",gatepass_s)
-module.exports={user,gatepass}
+const user = new mongoose.model("USER", userSchema)
+const gatepass = new mongoose.model("GATEPASS", gatepassSchema)
+module.exports = { user, gatepass }

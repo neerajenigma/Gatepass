@@ -11,7 +11,12 @@ const cookieparser=require('cookie-parser');
 // const staticpath=path.join(__dirname,"/grocery/build")
 
 // app.use(express.static(staticpath));
-app.use(cors());
+// app.use(cors());
+app.use(cors({
+    credentials: true,
+    origin: "http://localhost:3000",
+    optionsSuccessStatus: 200
+  }));
 
 
 // app.use(cookieparser);
